@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Etch-A-Sketch 3D - Arrow Controls & Speed</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        #app-container {
+            width: 100vw;
+            height: 100vh;
+            width: 100dvw;
+            height: 100dvh;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            overflow: hidden;
+        }
+        #canvas-holder {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 10;
+        }
+        .ui-overlay {
+            position: absolute;
+            bottom: max(10px, env(safe-area-inset-bottom));
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 30;
+            pointer-events: none;
+        }
+        .shake-btn {
+            pointer-events: auto;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: #ffffff;
+            font-weight: 800;
+            font-size: 13px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            padding: 10px 20px;
+            border-radius: 9999px;
+            box-shadow: 0 8px 20px rgba(239, 68, 68, 0.4), inset 0 2px 4px rgba(255, 255, 255, 0.3);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .shake-btn:active {
+            transform: scale(0.95);
+            box-shadow: 0 4px 10px rgba(239, 68, 68, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        <!-- Three.js Canvas Container -->
+        <div id="canvas-holder"></div>
+
+        <!-- UI Shake Button Overlay -->
+        <div class="ui-overlay">
+            <button id="shakeBtn" class="shake-btn">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                </svg>
+                Shake to Clear
+            </button>
+        </div>
+    </div>
+
+    <!-- Local Three.js script only -->
+    <script src="three.min.js"></script>
+    <script>
+        window.addEventListener('DOMContentLoaded', () => {
+            if (typeof THREE === 'undefined') {
+                console.error('Local three.min.js not found or failed to load!');
+                return;
+            }
+            initApplication();
+        });
+
+        function initApplication() {
+            const container = document.getElementById('canvas-holder');
+            const scene = new THREE.Scene();
+
+            const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 0, 10);
+            
+            const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // --- Lighting ---
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            dirLight.position.set(5, 12, 10);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.45);
+            fillLight.position.set(-6, -6, 5);
+            scene.add(fillLight);
+
+            const rimLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            rimLight.position.set(0, 10, -5);
+            scene.add(rimLight);
+
+            // --- Drawing Texture Setup ---
+            const canvasWidth = 2048;
+            const canvasHeight = 1536;
+            const drawCanvas = document.createElement('canvas');
+            drawCanvas.width = canvasWidth;
+            drawCanvas.height = canvasHeight;
+            const drawCtx = drawCanvas.getContext('2d');
+
+            function resetDrawingScreen() {
+                const grad = drawCtx.createLinearGradient(0, 0, canvasWidth, canvasHeight);
+                grad.addColorStop(0, '#bebebe');
+                grad.addColorStop(0.5, '#a3a3a3');
+                grad.addColorStop(1, '#838383');
+                drawCtx.fillStyle = grad;
+                drawCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+                const imgData = drawCtx.getImageData(0, 0, canvasWidth, canvasHeight);
+                const data = imgData.data;
+                for (let i = 0; i < data.length; i += 4) {
+                    const noise = (Math.random() - 0.5) * 12;
+                    data[i] = Math.min(255, Math.max(0, data[i] + noise));
+                    data[i+1] = Math.min(255, Math.max(0, data[i+1] + noise));
+                    data[i+2] = Math.min(255, Math.max(0, data[i+2] + noise));
+                }
+                drawCtx.putImageData(imgData, 0, 0);
+                
+                // Clear saved data on reset/shake
+                localStorage.removeItem('etchASketchDrawing');
+                localStorage.removeItem('etchASketchPointer');
+            }
+
+            // Load saved drawing from localStorage if available, otherwise initialize default screen
+            const savedDrawing = localStorage.getItem('etchASketchDrawing');
+            if (savedDrawing) {
+                const img = new Image();
+                img.onload = () => {
+                    drawCtx.drawImage(img, 0, 0);
+                    drawTexture.needsUpdate = true;
+                };
+                img.src = savedDrawing;
+            } else {
+                resetDrawingScreen();
+            }
+
+            const drawTexture = new THREE.CanvasTexture(drawCanvas);
+            drawTexture.minFilter = THREE.LinearMipmapLinearFilter;
+            drawTexture.magFilter = THREE.LinearFilter;
+            drawTexture.generateMipmaps = true;
+
+            // --- Root 3D Group ---
+            const masterGroup = new THREE.Group();
+            scene.add(masterGroup);
+
+            // Glossy Plastic Red Material
+            const frameMat = new THREE.MeshPhysicalMaterial({
+                color: 0xd60000,
+                roughness: 0.12,
+                metalness: 0.05,
+                clearcoat: 1.0,
+                clearcoatRoughness: 0.08,
+                reflectivity: 0.9
+            });
+            const frameMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.55), frameMat);
+            frameMesh.castShadow = true;
+            frameMesh.receiveShadow = true;
+            masterGroup.add(frameMesh);
+
+            const bevelMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.3, metalness: 0.6 });
+            const bevelMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.58), bevelMat);
+            bevelMesh.position.z = 0.01;
+            masterGroup.add(bevelMesh);
+
+            const screenMat = new THREE.MeshStandardMaterial({ map: drawTexture, roughness: 0.5, metalness: 0.05 });
+            const screenMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), screenMat);
+            screenMesh.position.z = 0.3;
+            masterGroup.add(screenMesh);
+
+            // --- Fuzzy Drawing Point Indicator ---
+            const indicatorCanvas = document.createElement('canvas');
+            indicatorCanvas.width = 128;
+            indicatorCanvas.height = 128;
+            const indCtx = indicatorCanvas.getContext('2d');
+            const indGrad = indCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
+            indGrad.addColorStop(0, 'rgba(24, 24, 27, 0.85)');
+            indGrad.addColorStop(0.4, 'rgba(24, 24, 27, 0.4)');
+            indGrad.addColorStop(1, 'rgba(24, 24, 27, 0)');
+            indCtx.fillStyle = indGrad;
+            indCtx.fillRect(0, 0, 128, 128);
+
+            const indicatorTexture = new THREE.CanvasTexture(indicatorCanvas);
+            const indicatorGeo = new THREE.PlaneGeometry(0.2, 0.2);
+            const indicatorMat = new THREE.MeshBasicMaterial({ map: indicatorTexture, transparent: true, depthWrite: false });
+            const indicatorMesh = new THREE.Mesh(indicatorGeo, indicatorMat);
+            indicatorMesh.position.z = 0.305;
+            masterGroup.add(indicatorMesh);
+
+            // Glossy Glass Overlay Material
+            const glassMat = new THREE.MeshPhysicalMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.22,
+                roughness: 0.02,
+                transmission: 0.92,
+                thickness: 0.2,
+                clearcoat: 1.0,
+                clearcoatRoughness: 0.02,
+                ior: 1.5
+            });
+            const glassMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), glassMat);
+            glassMesh.position.z = 0.31;
+            masterGroup.add(glassMesh);
+
+            // --- Logo Badge ---
+            const logoCanvas = document.createElement('canvas');
+            logoCanvas.width = 1024;
+            logoCanvas.height = 256;
+            const logoCtx = logoCanvas.getContext('2d');
+            
+            const goldGrad = logoCtx.createLinearGradient(0, 0, 1024, 256);
+            goldGrad.addColorStop(0, '#fef08a');
+            goldGrad.addColorStop(0.5, '#eab308');
+            goldGrad.addColorStop(1, '#ca8a04');
+
+            logoCtx.fillStyle = goldGrad;
+            logoCtx.beginPath();
+            if (logoCtx.roundRect) {
+                logoCtx.roundRect(16, 16, 992, 224, 32);
+            } else {
+                logoCtx.rect(16, 16, 992, 224);
+            }
+            logoCtx.fill();
+            logoCtx.lineWidth = 12;
+            logoCtx.strokeStyle = '#713f12';
+            logoCtx.stroke();
+
+            logoCtx.fillStyle = '#0f172a';
+            logoCtx.font = '900 82px system-ui, -apple-system, sans-serif';
+            logoCtx.textAlign = 'center';
+            logoCtx.textBaseline = 'middle';
+            logoCtx.fillText('android', 512, 96);
+
+            logoCtx.fillStyle = '#78350f';
+            logoCtx.font = 'bold 44px system-ui, -apple-system, sans-serif';
+            logoCtx.fillText('ETCH-A-SKETCH', 512, 180);
+
+            const logoTexture = new THREE.CanvasTexture(logoCanvas);
+            logoTexture.minFilter = THREE.LinearMipmapLinearFilter;
+            logoTexture.magFilter = THREE.LinearFilter;
+            logoTexture.generateMipmaps = true;
+
+            const logoGeo = new THREE.PlaneGeometry(1, 1);
+            const logoMat = new THREE.MeshBasicMaterial({ map: logoTexture, transparent: true });
+            const logoMesh = new THREE.Mesh(logoGeo, logoMat);
+            masterGroup.add(logoMesh);
+
+            // --- 3D Speed Slider Control Base & Knob (Enlarged) ---
+            const sliderBaseGeo = new THREE.BoxGeometry(2.1, 0.48, 0.12);
+            const sliderBaseMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5, metalness: 0.4 });
+            const sliderBaseMesh = new THREE.Mesh(sliderBaseGeo, sliderBaseMat);
+            masterGroup.add(sliderBaseMesh);
+
+            const sliderHitGeo = new THREE.BoxGeometry(2.4, 0.85, 0.4);
+            const sliderHitMat = new THREE.MeshBasicMaterial({ visible: false });
+            const sliderHitMesh = new THREE.Mesh(sliderHitGeo, sliderHitMat);
+            sliderBaseMesh.add(sliderHitMesh);
+
+            const sliderGrooveGeo = new THREE.BoxGeometry(1.8, 0.08, 0.04);
+            const sliderGrooveMat = new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.8 });
+            const sliderGrooveMesh = new THREE.Mesh(sliderGrooveGeo, sliderGrooveMat);
+            sliderGrooveMesh.position.z = 0.05;
+            masterGroup.add(sliderGrooveMesh);
+
+            const sliderKnobGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.26, 32);
+            const sliderKnobMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.2, metalness: 0.3 });
+            const sliderKnobMesh = new THREE.Mesh(sliderKnobGeo, sliderKnobMat);
+            sliderKnobMesh.rotation.x = Math.PI / 2;
+            sliderKnobMesh.position.z = 0.12;
+            sliderKnobMesh.castShadow = true;
+            masterGroup.add(sliderKnobMesh);
+
+            const sliderTexCanvas = document.createElement('canvas');
+            sliderTexCanvas.width = 512;
+            sliderTexCanvas.height = 128;
+            const sCtx = sliderTexCanvas.getContext('2d');
+            sCtx.fillStyle = '#0f172a';
+            sCtx.fillRect(0, 0, 512, 128);
+            sCtx.fillStyle = '#94a3b8';
+            sCtx.font = 'bold 36px system-ui, -apple-system, sans-serif';
+            sCtx.textAlign = 'center';
+            sCtx.textBaseline = 'middle';
+            sCtx.fillText('1   •   3   •   5   •   7   •   10', 256, 40);
+            sCtx.fillStyle = '#38bdf8';
+            sCtx.font = '900 32px system-ui, -apple-system, sans-serif';
+            sCtx.fillText('SPEED SELECTOR', 256, 95);
+
+            const sliderTexture = new THREE.CanvasTexture(sliderTexCanvas);
+            const sliderLabelGeo = new THREE.PlaneGeometry(1.9, 0.45);
+            const sliderLabelMat = new THREE.MeshBasicMaterial({ map: sliderTexture, transparent: true });
+            const sliderLabelMesh = new THREE.Mesh(sliderLabelGeo, sliderLabelMat);
+            masterGroup.add(sliderLabelMesh);
+
+            function createArrowMesh(colorHex, angle) {
+                const shape = new THREE.Shape();
+                shape.moveTo(-0.22, -0.16);
+                shape.lineTo(0.02, -0.16);
+                shape.lineTo(0.02, -0.28);
+                shape.lineTo(0.28, 0);
+                shape.lineTo(0.02, 0.28);
+                shape.lineTo(0.02, 0.16);
+                shape.lineTo(-0.22, 0.16);
+                shape.closePath();
+
+                const extrudeSettings = { steps: 1, depth: 0.18, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.03, bevelSegments: 3 };
+                const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+                geometry.center();
+                geometry.scale(1.85, 1.85, 1.85);
+
+                const material = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.25, metalness: 0.2 });
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.rotation.z = angle;
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                return mesh;
+            }
+
+            const baseGeo = new THREE.CylinderGeometry(0.75, 0.78, 0.18, 32);
+            const baseMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.3 });
+            const arrowButtons = [];
+            const arrowGroups = [];
+
+            function assembleArrowButton(colorHex, angle, dirKey) {
+                const group = new THREE.Group();
+                const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+                baseMesh.rotation.x = Math.PI / 2;
+                group.add(baseMesh);
+
+                const arrowMesh = createArrowMesh(colorHex, angle);
+                arrowMesh.position.z = 0.10;
+                group.add(arrowMesh);
+
+                const hitGeo = new THREE.CylinderGeometry(0.95, 0.95, 0.5, 32);
+                const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+                const hitMesh = new THREE.Mesh(hitGeo, hitMat);
+                hitMesh.rotation.x = Math.PI / 2;
+                group.add(hitMesh);
+
+                masterGroup.add(group);
+                arrowGroups.push({ group, dirKey });
+
+                const buttonData = {
+                    group: group,
+                    arrowMesh: arrowMesh,
+                    hitMesh: hitMesh,
+                    dirKey: dirKey,
+                    isPressed: false,
+                    initialZ: 0.3,
+                    pressedZ: 0.20
+                };
+                hitMesh.userData = buttonData;
+                arrowMesh.userData = buttonData;
+                arrowButtons.push(hitMesh);
+            }
+
+            assembleArrowButton(0x2563eb, Math.PI, 'left');
+            assembleArrowButton(0x2563eb, 0, 'right');
+            assembleArrowButton(0xeab308, -Math.PI / 2, 'down');
+            assembleArrowButton(0xeab308, Math.PI / 2, 'up');
+
+            // --- Load Saved Pointer Position or Default to Center ---
+            let savedPointer = null;
+            try {
+                const pointerData = localStorage.getItem('etchASketchPointer');
+                if (pointerData) {
+                    savedPointer = JSON.parse(pointerData);
+                }
+            } catch (e) {
+                console.error('Failed to parse saved pointer position', e);
+            }
+
+            let posX = savedPointer !== null && typeof savedPointer.x === 'number' ? savedPointer.x : canvasWidth / 2;
+            let posY = savedPointer !== null && typeof savedPointer.y === 'number' ? savedPointer.y : canvasHeight / 2;
+            let prevX = posX;
+            let prevY = posY;
+
+            let screenW = 1;
+            let screenH = 1;
+            let verticalOffset = 0;
+
+            // Load saved speed or default to 5
+            const savedSpeed = localStorage.getItem('etchASketchSpeed');
+            let speedVal = savedSpeed !== null ? parseInt(savedSpeed, 10) : 5;
+
+            let sliderMinX = 0;
+            let sliderMaxX = 0;
+            let isDraggingSlider = false;
+            let activeSliderPointerId = null;
+
+            function updateIndicatorPosition() {
+                const normalizedX = (posX / canvasWidth) - 0.5;
+                const normalizedY = 0.5 - (posY / canvasHeight);
+                indicatorMesh.position.x = normalizedX * screenW;
+                indicatorMesh.position.y = verticalOffset + (normalizedY * screenH);
+            }
+
+            let saveTimeout = null;
+            function drawLineSegment(x, y) {
+                drawCtx.strokeStyle = '#18181b';
+                drawCtx.lineWidth = 6.0;
+                drawCtx.lineCap = 'round';
+                drawCtx.lineJoin = 'round';
+
+                drawCtx.beginPath();
+                drawCtx.moveTo(prevX, prevY);
+                drawCtx.lineTo(x, y);
+                drawCtx.stroke();
+
+                prevX = x;
+                prevY = y;
+                drawTexture.needsUpdate = true;
+                updateIndicatorPosition();
+
+                // Debounce saving drawing and pointer to localStorage
+                clearTimeout(saveTimeout);
+                saveTimeout = setTimeout(() => {
+                    localStorage.setItem('etchASketchDrawing', drawCanvas.toDataURL());
+                    localStorage.setItem('etchASketchPointer', JSON.stringify({ x: posX, y: posY }));
+                }, 300);
+            }
+
+            drawLineSegment(posX, posY);
+
+            const activeDirections = { left: false, right: false, up: false, down: false };
+            const baseStepSize = 1.5;
+
+            const raycaster = new THREE.Raycaster();
+            const mouseVector = new THREE.Vector2();
+            const activeTouches = new Map();
+
+            function updateKnobPositionFromSpeed() {
+                const t = (speedVal - 1) / 9;
+                sliderKnobMesh.position.x = sliderMinX + t * (sliderMaxX - sliderMinX);
+            }
+
+            function updateArrowPressState() {
+                arrowButtons.forEach(btn => btn.userData.isPressed = false);
+                Object.keys(activeDirections).forEach(k => activeDirections[k] = false);
+
+                for (const [pId, pos] of activeTouches.entries()) {
+                    mouseVector.x = (pos.x / window.innerWidth) * 2 - 1;
+                    mouseVector.y = -(pos.y / window.innerHeight) * 2 + 1;
+
+                    raycaster.setFromCamera(mouseVector, camera);
+
+                    if (isDraggingSlider && pId === activeSliderPointerId) {
+                        const intersects = raycaster.intersectObject(sliderBaseMesh);
+                        if (intersects.length > 0) {
+                            const localPoint = sliderBaseMesh.worldToLocal(intersects[0].point.clone());
+                            const halfW = 2.1 / 2 * 0.85;
+                            const clampedX = Math.max(-halfW, Math.min(halfW, localPoint.x));
+                            const norm = (clampedX - (-halfW)) / (halfW * 2);
+                            speedVal = Math.max(1, Math.min(10, Math.round(1 + norm * 9)));
+                            updateKnobPositionFromSpeed();
+                            localStorage.setItem('etchASketchSpeed', speedVal);
+                        }
+                        continue;
+                    }
+
+                    const sliderIntersects = raycaster.intersectObject(sliderHitMesh);
+                    if (sliderIntersects.length > 0 && !isDraggingSlider) {
+                        isDraggingSlider = true;
+                        activeSliderPointerId = pId;
+                        const localPoint = sliderBaseMesh.worldToLocal(sliderIntersects[0].point.clone());
+                        const halfW = 2.1 / 2 * 0.85;
+                        const clampedX = Math.max(-halfW, Math.min(halfW, localPoint.x));
+                        const norm = (clampedX - (-halfW)) / (halfW * 2);
+                        speedVal = Math.max(1, Math.min(10, Math.round(1 + norm * 9)));
+                        updateKnobPositionFromSpeed();
+                        localStorage.setItem('etchASketchSpeed', speedVal);
+                        continue;
+                    }
+
+                    const arrowIntersects = raycaster.intersectObjects(arrowButtons);
+                    if (arrowIntersects.length > 0) {
+                        const hitBtn = arrowIntersects[0].object;
+                        const data = hitBtn.userData;
+                        data.isPressed = true;
+                        activeDirections[data.dirKey] = true;
+                    }
+                }
+
+                if (keysPressed['ArrowLeft']) activeDirections['left'] = true;
+                if (keysPressed['ArrowRight']) activeDirections['right'] = true;
+                if (keysPressed['ArrowUp']) activeDirections['up'] = true;
+                if (keysPressed['ArrowDown']) activeDirections['down'] = true;
+
+                arrowButtons.forEach(btn => {
+                    const data = btn.userData;
+                    const keyDirActive = activeDirections[data.dirKey];
+                    const targetZ = (data.isPressed || keyDirActive) ? data.pressedZ : data.initialZ;
+                    data.group.position.z += (targetZ - data.group.position.z) * 0.3;
+                });
+            }
+
+            window.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+                updateArrowPressState();
+            }, { passive: false });
+
+            window.addEventListener('pointermove', (e) => {
+                e.preventDefault();
+                if (activeTouches.has(e.pointerId)) {
+                    activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+                    updateArrowPressState();
+                }
+            }, { passive: false });
+
+            const releasePointer = (e) => {
+                e.preventDefault();
+                if (activeTouches.has(e.pointerId)) {
+                    activeTouches.delete(e.pointerId);
+                    if (e.pointerId === activeSliderPointerId) {
+                        isDraggingSlider = false;
+                        activeSliderPointerId = null;
+                    }
+                    updateArrowPressState();
+                }
+            };
+
+            window.addEventListener('pointerup', releasePointer, { passive: false });
+            window.addEventListener('pointercancel', releasePointer, { passive: false });
+            window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            const keysPressed = {};
+            window.addEventListener('keydown', (e) => {
+                if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+                    e.preventDefault();
+                    keysPressed[e.key] = true;
+                    updateArrowPressState();
+                }
+            });
+
+            window.addEventListener('keyup', (e) => {
+                if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+                    e.preventDefault();
+                    keysPressed[e.key] = false;
+                    updateArrowPressState();
+                }
+            });
+
+            let isShaking = false;
+            document.getElementById('shakeBtn').addEventListener('click', (e) => {
+                e.preventDefault();
+                triggerShakeAndReset(true);
+            });
+
+            function triggerShakeAndReset(clearScreen = false) {
+                if (isShaking) return;
+                isShaking = true;
+
+                let startTime = performance.now();
+                const duration = 800;
+
+                function shakeLoop(time) {
+                    let elapsed = time - startTime;
+                    if (elapsed < duration) {
+                        const factor = (1 - elapsed / duration) * 0.45;
+                        masterGroup.position.x = (Math.random() - 0.5) * factor;
+                        masterGroup.position.y = (Math.random() - 0.5) * factor;
+                        masterGroup.rotation.z = (Math.random() - 0.5) * factor * 0.25;
+                        requestAnimationFrame(shakeLoop);
+                    } else {
+                        masterGroup.position.set(0, 0, 0);
+                        masterGroup.rotation.set(0, 0, 0);
+                        
+                        if (clearScreen) {
+                            resetDrawingScreen();
+                            drawTexture.needsUpdate = true;
+                        }
+                        
+                        prevX = posX;
+                        prevY = posY;
+                        drawLineSegment(posX, posY);
+                        isShaking = false;
+                    }
+                }
+                requestAnimationFrame(shakeLoop);
+            }
+
+            function resizeCanvasToDevice() {
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+
+                camera.aspect = width / height;
+                camera.updateProjectionMatrix();
+                renderer.setSize(width, height);
+
+                const vFOV = (camera.fov * Math.PI) / 180;
+                const visibleHeight = 2 * Math.tan(vFOV / 2) * camera.position.z;
+                const visibleWidth = visibleHeight * camera.aspect;
+
+                const frameW = visibleWidth * 0.98;
+                const frameH = visibleHeight * 0.96;
+
+                frameMesh.geometry.dispose();
+                frameMesh.geometry = new THREE.BoxGeometry(frameW, frameH, 0.55);
+
+                screenW = frameW * 0.92;
+                screenH = frameH * 0.60;
+                verticalOffset = frameH * 0.15;
+
+                bevelMesh.geometry.dispose();
+                bevelMesh.geometry = new THREE.BoxGeometry(screenW * 1.03, screenH * 1.03, 0.58);
+                bevelMesh.position.set(0, verticalOffset, 0.01);
+
+                screenMesh.geometry.dispose();
+                screenMesh.geometry = new THREE.PlaneGeometry(screenW, screenH);
+                screenMesh.position.set(0, verticalOffset, 0.3);
+
+                glassMesh.geometry.dispose();
+                glassMesh.geometry = new THREE.PlaneGeometry(screenW, screenH);
+                glassMesh.position.set(0, verticalOffset, 0.31);
+
+                logoMesh.geometry.dispose();
+                logoMesh.geometry = new THREE.PlaneGeometry(frameW * 0.32, frameH * 0.08);
+                logoMesh.position.set(0, frameH * 0.43, 0.3);
+
+                const btnY = -frameH * 0.32;
+                const xOffset = frameW * 0.30;
+                const innerSpacing = frameW * 0.22;
+
+                arrowGroups.forEach(item => {
+                    if (item.dirKey === 'left') item.group.position.set(-xOffset - innerSpacing/2, btnY, 0.3);
+                    if (item.dirKey === 'right') item.group.position.set(-xOffset + innerSpacing/2, btnY, 0.3);
+                    if (item.dirKey === 'down') item.group.position.set(xOffset - innerSpacing/2, btnY, 0.3);
+                    if (item.dirKey === 'up') item.group.position.set(xOffset + innerSpacing/2, btnY, 0.3);
+                });
+
+                const sliderY = btnY;
+                sliderBaseMesh.position.set(0, sliderY, 0.3);
+                sliderGrooveMesh.position.set(0, sliderY, 0.33);
+                sliderKnobMesh.position.set(0, sliderY, 0.38);
+                sliderLabelMesh.position.set(0, sliderY - 0.32, 0.3);
+
+                sliderMinX = -0.85;
+                sliderMaxX = 0.85;
+                updateKnobPositionFromSpeed();
+
+                updateIndicatorPosition();
+                triggerShakeAndReset(false);
+            }
+
+            window.addEventListener('resize', resizeCanvasToDevice);
+            resizeCanvasToDevice();
+
+            function animate() {
+                requestAnimationFrame(animate);
+
+                let dx = 0;
+                let dy = 0;
+                const currentStep = baseStepSize * speedVal;
+
+                if (activeDirections.left) dx -= currentStep;
+                if (activeDirections.right) dx += currentStep;
+                if (activeDirections.up) dy -= currentStep;   
+                if (activeDirections.down) dy += currentStep;
+
+                if (dx !== 0 || dy !== 0) {
+                    if (dx !== 0 && dy !== 0) {
+                        dx *= 0.7071;
+                        dy *= 0.7071;
+                    }
+                    posX = Math.max(0, Math.min(canvasWidth, posX + dx));
+                    posY = Math.max(0, Math.min(canvasHeight, posY + dy));
+                    drawLineSegment(posX, posY);
+                }
+
+                updateArrowPressState();
+                renderer.render(scene, camera);
+            }
+            animate();
+        }
+    </script>
+</body>
+</html>
