@@ -6,8 +6,13 @@ etch-a-sketch ©
 
 
 
-![ic](ic.png)  
+<img src="ic.png" style="width: 30px;">  
 
-![rec](recording.gif)  
+<img src"recording.gif" style="width: 500px">  
+
+<img src"windowsrecording.gif" style="width: 930px">  
+
+
+
 
 
